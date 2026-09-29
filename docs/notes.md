@@ -4,7 +4,7 @@ Port – A number (0–65535) that picks which app on your machine gets the data
 
 Blocking – The program stops and waits until the network call finishes (e.g., "wait until data arrives"). Nothing else runs on that thread in the meantime.
 
-
+STEP 1:
 Q: What does accept() do, and why does the program sit there?
 A: It's the server saying "I'm listening, who's next?" and sleeping until a client knocks. Not stuck — just waiting.
 
@@ -32,3 +32,21 @@ A: It accepted one connection, then read from it synchronously. Client leaves �
 
 Q: How to fix it?
 A: Loop around accept(), spawn a thread per client. Main thread goes back to listening immediately.
+
+Step 2: RESP parser
+Q: Why can't we just read once and call it a command?
+A: TCP is a byte stream, not a message protocol.  A single read() might give you half a command, or two commands glued together. You have to loop-read until your framing rules (the *N / $N lengths) say "I have a complete message."
+
+Q: Why read bulk-string content by length instead of scanning for \r\n?
+A: Because the content can contain \r\n — it's binary-safe.  If you searched for a delimiter, a value like "hello\r\nworld" would look like two strings. The length prefix ($11) tells you exactly how many bytes to consume, no ambiguity.
+
+Q: What's the difference between readCommand() returning null and throwing EOFException?
+A:
+
+* null → the client closed the connection cleanly (sent FIN). You got a complete "no more data" signal between commands. Time to move on.
+* EOFException → the connection died mid-command. You were in the middle of parsing (e.g., expected 4 bytes, got 2, then EOF). That's an error — you can't recover a partial command, so you throw it up to the handler to clean up.
+Q: Why add MAX_BULK_LENGTH? What does it protect against?
+A: Two things:
+
+1. Malicious/buggy client sends $999999999999\r\n — without a cap you'd try to allocate a gigabyte (or more) and OOM the server. A limit says "that's not a real command, reject it."
+2. Protocol bugs — if your parser misreads the length (off-by-one, integer overflow), a huge allocation is the first symptom. The cap turns a silent memory leak into a loud, early error.
