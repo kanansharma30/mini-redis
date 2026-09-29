@@ -50,3 +50,19 @@ A: Two things:
 
 1. Malicious/buggy client sends $999999999999\r\n — without a cap you'd try to allocate a gigabyte (or more) and OOM the server. A limit says "that's not a real command, reject it."
 2. Protocol bugs — if your parser misreads the length (off-by-one, integer overflow), a huge allocation is the first symptom. The cap turns a silent memory leak into a loud, early error.
+
+Step 2b: Store and commands
+Q: Why separate Store, CommandHandler, RespWriter, and RedisServer into different classes?
+A: Each one has one job. Store holds data, RespWriter formats bytes, CommandHandler decides what to do, RedisServer wires them together. The benefit you actually saw: in tests you can swap Store for a fake or test RespWriter in isolation without spinning up a socket. One class doing everything means every test needs the whole machine.
+
+Q: Why ConcurrentHashMap and not HashMap?
+A: Multiple client threads read/write the map at the same time. A plain HashMap under concurrent writes can silently lose entries or even infinite-loop during rehash. ConcurrentHashMap locks at the bucket level — reads are lock-free, writes only block the one bucket being touched.
+
+Q: What does GET return for a missing key, and how is that different from an empty string?
+A:
+1. Missing key → $-1\r\n (null bulk string) → client sees nil
+2. Empty string → $0\r\n\r\n → client sees ""
+They're different on purpose: "I don't have that key" ≠ "that key exists and its value is nothing." Without the distinction you couldn't tell a missing key from a key you explicitly set to "".
+
+Q: Why validate argument count in every command?
+A: Because the client is a peer, not a friend. If someone sends SET with zero args or GET with three, and you don't check, you'll either ArrayIndexOutOfBoundsException or silently do the wrong thing. A quick if (args.length != 3) return error turns a crash into a clean -ERR wrong number of arguments reply.

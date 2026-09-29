@@ -1,7 +1,10 @@
 package com.kanan.miniredis.server;
 
+import com.kanan.miniredis.command.CommandHandler;
 import com.kanan.miniredis.protocol.ProtocolException;
 import com.kanan.miniredis.protocol.RespParser;
+import com.kanan.miniredis.protocol.RespWriter;
+import com.kanan.miniredis.store.Store;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -20,18 +23,19 @@ public class RedisServer {
     }
 
     public void start() throws IOException {
+        // One store shared by everything, one handler that uses it.
+        CommandHandler handler = new CommandHandler(new Store());
+
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             System.out.println("mini-redis listening on port " + port);
             Socket client = serverSocket.accept();
             System.out.println("Client connected");
-            handleClient(client);
+            handleClient(client, handler);
         }
     }
 
-    private void handleClient(Socket client) {
+    private void handleClient(Socket client, CommandHandler handler) {
         try (client) {
-            // BufferedInputStream: reads big chunks from the network and hands out
-            // bytes from memory, instead of one slow system call per byte.
             RespParser parser = new RespParser(new BufferedInputStream(client.getInputStream()));
             OutputStream out = client.getOutputStream();
 
@@ -40,26 +44,16 @@ public class RedisServer {
                 try {
                     command = parser.readCommand();
                 } catch (ProtocolException e) {
-                    write(out, "-ERR Protocol error: " + e.getMessage() + "\r\n");
+                    write(out, RespWriter.error("ERR Protocol error: " + e.getMessage()));
                     break; // after garbage we cannot trust the stream, so close it
                 }
 
                 if (command == null) {
                     break; // client disconnected cleanly
                 }
-                if (command.isEmpty()) {
-                    continue;
-                }
 
-                System.out.println("Parsed: " + command);
-
-                // TEMPORARY: real command handling comes in the next step.
-                String name = command.get(0).toUpperCase();
-                if (name.equals("PING")) {
-                    write(out, "+PONG\r\n");
-                } else {
-                    write(out, "+OK\r\n");
-                }
+                System.out.println("Parsed: " + command); // debug log (we will remove it before benchmarking)
+                write(out, handler.execute(command));
             }
         } catch (IOException e) {
             System.out.println("Connection error: " + e.getMessage());
