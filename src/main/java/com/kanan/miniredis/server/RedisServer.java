@@ -23,12 +23,13 @@ public class RedisServer {
     private final int port;
     private final ExecutorService workers = Executors.newFixedThreadPool(WORKER_THREADS);
     private volatile ServerSocket serverSocket;   // volatile: written by one thread, read by another
-
+    private final Store store = new Store();
     public RedisServer(int port) { this.port = port; }
 
     public void start() throws IOException {
-        CommandHandler handler = new CommandHandler(new Store());
+        CommandHandler handler = new CommandHandler(store);
         serverSocket = new ServerSocket(port);
+        store.startSweeper(100);                        // scan for expired keys every 100 ms
         System.out.println("mini-redis listening on port " + port);
         try {
             while (!serverSocket.isClosed()) {
@@ -40,11 +41,14 @@ public class RedisServer {
             // otherwise: stop() closed the socket on purpose, exit quietly
         } finally {
             workers.shutdown();
+            store.stopSweeper();
+
         }
     }
 
     /** Stops accepting new clients and lets running ones finish (up to 5 seconds). */
     public void stop() throws IOException, InterruptedException {
+        store.stopSweeper();
         if (serverSocket != null) serverSocket.close();   // makes accept() throw
         workers.shutdown();
         workers.awaitTermination(5, TimeUnit.SECONDS);

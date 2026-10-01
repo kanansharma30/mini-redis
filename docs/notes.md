@@ -91,3 +91,16 @@ A: Multiple workers insert/remove entries simultaneously. A plain HashMap under 
 
 Q: How does stop() wake a thread blocked in accept()?
 A: Call serverSocket.close() from another thread. The blocked accept() immediately throws SocketException, the catch fires, the loop exits.
+
+STEP 4:
+Q: Why store an absolute deadline instead of a "seconds left" counter?
+A: A countdown is fragile — if the process gets paused (GC, sleep, clock drift), the number is stale. An absolute deadline is computed once at write time (now + ttl) and compared against now() at read time. It's immune to pauses and survives restarts. Redis does exactly this: stores an absolute Unix timestamp in milliseconds, not a ticking counter.
+
+Q: What's the difference between lazy and active expiry, and why does Redis need both?
+A: Lazy = check expiry only when a key is accessed; if expired, delete it and return nil.  Active = a background cycle (10×/sec) samples 20 random keys and deletes any that are expired.  Redis needs both because lazy alone means a never-accessed key holds memory forever; active alone would require scanning every key, which is too expensive. Together: lazy guarantees correctness on read, active reclaims memory for keys nobody touches.
+
+Q: Why data.remove(key, entry) rather than data.remove(key)?
+A: The two-arg form atomically removes the entry only if the value is still the one you checked.  The race: between your "is this entry expired?" check and your remove(key), another thread could have written a fresh, non-expired value for the same key. remove(key) would nuke that new value too. remove(key, entry) says "only delete it if it's still the old expired one I was looking at."
+
+Q: Why does the Store take a Clock as a constructor argument?
+A: Dependency injection. In production you pass Clock.systemUTC(). In tests you inject a fake clock you control — so you can "advance time" by a few seconds with one method call instead of actually sleeping. Tests become fast, deterministic, and you can test the exact boundary (e.g., "does it expire at exactly 30 s or 30.001 s?") without any real waiting.

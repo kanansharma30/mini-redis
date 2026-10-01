@@ -29,6 +29,8 @@ public class CommandHandler {
             case "SET" -> set(args);
             case "GET" -> get(args);
             case "DEL" -> del(args);
+            case "EXPIRE" -> expire(args);
+            case "TTL" -> ttl(args);
             default -> RespWriter.error("ERR unknown command '" + command.get(0) + "'");
         };
     }
@@ -44,10 +46,20 @@ public class CommandHandler {
     }
 
     private String set(List<String> args) {
-        if (args.size() != 2) {
-            return wrongArgs("set");
+        if (args.size() == 2) {
+            store.set(args.get(0), args.get(1));
+            return RespWriter.simpleString("OK");
         }
-        store.set(args.get(0), args.get(1));
+        if (args.size() != 4) return wrongArgs("set");
+
+        String option = args.get(2).toUpperCase(Locale.ROOT);
+        if (!option.equals("EX") && !option.equals("PX")) return RespWriter.error("ERR syntax error");
+        Long amount = parseLong(args.get(3));
+        if (amount == null) return RespWriter.error("ERR value is not an integer or out of range");
+        Long ttlMillis = toMillis(amount, option.equals("EX"));
+        if (ttlMillis == null) return RespWriter.error("ERR invalid expire time in 'set' command");
+
+        store.set(args.get(0), args.get(1), ttlMillis);
         return RespWriter.simpleString("OK");
     }
 
@@ -73,5 +85,33 @@ public class CommandHandler {
 
     private String wrongArgs(String commandName) {
         return RespWriter.error("ERR wrong number of arguments for '" + commandName + "' command");
+    }
+    private String expire(List<String> args) {
+        if (args.size() != 2) return wrongArgs("expire");
+        Long seconds = parseLong(args.get(1));
+        if (seconds == null) return RespWriter.error("ERR value is not an integer or out of range");
+        Long ttlMillis = toMillis(seconds, true);
+        if (ttlMillis == null) return RespWriter.error("ERR invalid expire time in 'expire' command");
+        return RespWriter.integer(store.expire(args.get(0), ttlMillis) ? 1 : 0);
+    }
+
+    private String ttl(List<String> args) {
+        if (args.size() != 1) return wrongArgs("ttl");
+        long ms = store.ttlMillis(args.get(0));
+        if (ms < 0) return RespWriter.integer(ms);          // -1 or -2
+        return RespWriter.integer((ms + 500) / 1000);       // round to nearest second
+    }
+
+    /** Returns null if the text is not a valid integer. */
+    private Long parseLong(String text) {
+        try { return Long.parseLong(text); }
+        catch (NumberFormatException e) { return null; }
+    }
+
+    /** Converts to milliseconds. Returns null if not positive or too large. */
+    private Long toMillis(long amount, boolean isSeconds) {
+        if (amount <= 0) return null;
+        try { return isSeconds ? Math.multiplyExact(amount, 1000L) : amount; }
+        catch (ArithmeticException e) { return null; }       // overflow
     }
 }

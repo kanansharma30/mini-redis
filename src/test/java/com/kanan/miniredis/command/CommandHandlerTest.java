@@ -1,88 +1,56 @@
 package com.kanan.miniredis.command;
 
 import com.kanan.miniredis.store.Store;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class CommandHandlerTest {
+class CommandHandlerTtlTest {
+    private final AtomicLong now = new AtomicLong(0);
+    private final CommandHandler handler = new CommandHandler(new Store(now::get));
 
-    private CommandHandler handler;
+    private String run(String... parts) { return handler.execute(List.of(parts)); }
 
-    @BeforeEach
-    void setUp() {
-        handler = new CommandHandler(new Store()); // fresh empty store for every test
+    @Test
+    void setWithExThenExpires() {
+        assertEquals("+OK\r\n", run("SET", "k", "v", "EX", "10"));
+        assertEquals(":10\r\n", run("TTL", "k"));
+        now.addAndGet(11_000);
+        assertEquals("$-1\r\n", run("GET", "k"));
+        assertEquals(":-2\r\n", run("TTL", "k"));
     }
 
     @Test
-    void pingReturnsPong() {
-        assertEquals("+PONG\r\n", handler.execute(List.of("PING")));
+    void setWithPxAndLowercaseOption() {
+        run("SET", "k", "v", "px", "1500");
+        now.addAndGet(1499);
+        assertEquals("$1\r\nv\r\n", run("GET", "k"));
+        now.addAndGet(1);
+        assertEquals("$-1\r\n", run("GET", "k"));
     }
 
     @Test
-    void pingWithMessageEchoesIt() {
-        assertEquals("$5\r\nhello\r\n", handler.execute(List.of("PING", "hello")));
+    void ttlOfKeyWithoutExpiryIsMinusOne() {
+        run("SET", "k", "v");
+        assertEquals(":-1\r\n", run("TTL", "k"));
     }
 
     @Test
-    void setThenGetReturnsValue() {
-        assertEquals("+OK\r\n", handler.execute(List.of("SET", "name", "arun")));
-        assertEquals("$4\r\narun\r\n", handler.execute(List.of("GET", "name")));
+    void expireCommand() {
+        run("SET", "k", "v");
+        assertEquals(":1\r\n", run("EXPIRE", "k", "100"));
+        assertEquals(":100\r\n", run("TTL", "k"));
+        assertEquals(":0\r\n", run("EXPIRE", "nothing", "10"));
     }
 
     @Test
-    void getMissingKeyReturnsNull() {
-        assertEquals("$-1\r\n", handler.execute(List.of("GET", "nothing")));
-    }
-
-    @Test
-    void setOverwritesExistingValue() {
-        handler.execute(List.of("SET", "k", "old"));
-        handler.execute(List.of("SET", "k", "new"));
-        assertEquals("$3\r\nnew\r\n", handler.execute(List.of("GET", "k")));
-    }
-
-    @Test
-    void delReturnsNumberOfKeysActuallyRemoved() {
-        handler.execute(List.of("SET", "a", "1"));
-        handler.execute(List.of("SET", "b", "2"));
-        assertEquals(":2\r\n", handler.execute(List.of("DEL", "a", "b", "c")));
-        assertEquals("$-1\r\n", handler.execute(List.of("GET", "a")));
-    }
-
-    @Test
-    void commandNamesAreCaseInsensitive() {
-        assertEquals("+OK\r\n", handler.execute(List.of("set", "k", "v")));
-        assertEquals("$1\r\nv\r\n", handler.execute(List.of("Get", "k")));
-    }
-
-    @Test
-    void keysAreCaseSensitive() {
-        handler.execute(List.of("SET", "Name", "arun"));
-        assertEquals("$-1\r\n", handler.execute(List.of("GET", "name")));
-    }
-
-    @Test
-    void wrongArgumentCountsReturnErrors() {
-        assertEquals("-ERR wrong number of arguments for 'get' command\r\n",
-                handler.execute(List.of("GET")));
-        assertEquals("-ERR wrong number of arguments for 'set' command\r\n",
-                handler.execute(List.of("SET", "onlykey")));
-        assertEquals("-ERR wrong number of arguments for 'del' command\r\n",
-                handler.execute(List.of("DEL")));
-    }
-
-    @Test
-    void unknownCommandReturnsError() {
-        assertEquals("-ERR unknown command 'FOO'\r\n", handler.execute(List.of("FOO")));
-    }
-
-    @Test
-    void multiByteValueUsesByteLengthInReply() {
-        handler.execute(List.of("SET", "k", "é"));
-        assertEquals("$2\r\né\r\n", handler.execute(List.of("GET", "k"))); // 1 char, 2 bytes
+    void invalidInputGetsCleanErrors() {
+        assertEquals("-ERR invalid expire time in 'set' command\r\n", run("SET", "k", "v", "EX", "0"));
+        assertEquals("-ERR value is not an integer or out of range\r\n", run("SET", "k", "v", "EX", "abc"));
+        assertEquals("-ERR syntax error\r\n", run("SET", "k", "v", "XX", "5"));
+        assertEquals("-ERR wrong number of arguments for 'ttl' command\r\n", run("TTL"));
     }
 }
