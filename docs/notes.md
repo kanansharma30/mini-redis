@@ -66,3 +66,28 @@ They're different on purpose: "I don't have that key" ≠ "that key exists and i
 
 Q: Why validate argument count in every command?
 A: Because the client is a peer, not a friend. If someone sends SET with zero args or GET with three, and you don't check, you'll either ArrayIndexOutOfBoundsException or silently do the wrong thing. A quick if (args.length != 3) return error turns a crash into a clean -ERR wrong number of arguments reply.
+
+STEP 3:
+Q: Why can't one thread both accept() and serve a client?
+A: accept() blocks until a connection arrives. Once you start reading/writing for that client, you're stuck in I/O and can't call accept() again. No new clients get in.
+
+Q: What blocks?
+A: The thread blocks on accept() waiting for a new connection, or on read()/write() waiting for data from the current client. Either way, it can't do both at once.
+
+Q: What goes wrong with thread-per-client at 10,000 clients?
+A: ~10 GB of stack memory, CPU drowns in context switches, OS runs out of file descriptors. The C10K problem.
+
+Q: How does a fixed pool fix that?
+A: Caps the number of live threads (e.g., 20), bounding memory and context-switch cost.
+
+Q: What's the new weakness of a fixed pool?
+A: If all workers are blocked on slow/long-lived connections, new clients wait indefinitely even though the CPU is idle. Pool starvation.
+
+Q: Which objects are shared vs. per-connection?
+A: Shared: ServerSocket, the thread pool, the client map. Per-connection: each client's socket, its streams, its session state.
+
+Q: Why ConcurrentHashMap?
+A: Multiple workers insert/remove entries simultaneously. A plain HashMap under concurrent writes corrupts. ConcurrentHashMap is safe without locking the whole map.
+
+Q: How does stop() wake a thread blocked in accept()?
+A: Call serverSocket.close() from another thread. The blocked accept() immediately throws SocketException, the catch fires, the loop exits.
