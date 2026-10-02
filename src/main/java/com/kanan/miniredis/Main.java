@@ -1,6 +1,9 @@
 package com.kanan.miniredis;
 
+import com.kanan.miniredis.persistence.FsyncPolicy;
 import com.kanan.miniredis.server.RedisServer;
+
+import java.nio.file.Path;
 
 public class Main {
     public static void main(String[] args) throws Exception {
@@ -13,6 +16,5 @@ public class Main {
                 System.exit(1);
             }
         }
-        new RedisServer(port).start();
-    }
+        new RedisServer(port, Path.of("appendonly.aof"), FsyncPolicy.EVERYSEC).start();    }
 }

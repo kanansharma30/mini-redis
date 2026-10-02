@@ -1,9 +1,16 @@
 package com.kanan.miniredis.protocol;
 
 import java.nio.charset.StandardCharsets;
-
+import java.util.List;
 /** Builds RESP-formatted replies as text. */
 public final class RespWriter {
+
+    /** Encodes a command as a RESP array of bulk strings (the format clients send). */
+    public static String commandArray(List<String> parts) {
+        StringBuilder sb = new StringBuilder("*").append(parts.size()).append("\r\n");
+        for (String part : parts) sb.append(bulkString(part));
+        return sb.toString();
+    }
 
     private RespWriter() {
         // utility class: static methods only, never instantiated

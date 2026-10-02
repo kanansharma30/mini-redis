@@ -104,3 +104,22 @@ A: The two-arg form atomically removes the entry only if the value is still the 
 
 Q: Why does the Store take a Clock as a constructor argument?
 A: Dependency injection. In production you pass Clock.systemUTC(). In tests you inject a fake clock you control — so you can "advance time" by a few seconds with one method call instead of actually sleeping. Tests become fast, deterministic, and you can test the exact boundary (e.g., "does it expire at exactly 30 s or 30.001 s?") without any real waiting.
+
+
+STEP 6:
+Q: Why log commands to a file and replay them, and why is the file "append-only"?
+A: The AOF (Append-Only File) is a write-ahead log: every mutating command is written to disk before it's applied in memory. On restart, you replay the file to rebuild state. Append-only means you never rewrite or truncate the middle — you just keep adding. That makes it crash-safe (no torn pages), simple to implement (one write() + fsync() per command), and lets you stream it to replicas.
+
+Q: What's the difference between write and fsync? Which policy survives a process kill, and which survives a power cut?
+A: write() hands bytes to the OS page cache — they're in RAM, not yet on the disk platter. fsync() forces the OS to flush them to physical storage.
+
+NOFSYNC (write only): fast, but a power cut loses everything in the page cache. A process kill is fine — the OS still owns the cache.
+EVERYSEC (fsync once per second): survives a process kill; a power cut loses at most ~1 s of writes.
+ALWAYS (fsync every command): survives a power cut. Slowest.
+So: process kill → any policy survives (OS flushes on exit). Power cut → only ALWAYS (or EVERYSEC with ≤1 s loss) survives.
+
+Q: Why log SET k v PXAT <deadline> instead of SET k v EX 10?
+A: EX 10 is relative — it means "expire 10 s from now." If you replay that command 5 minutes later, the key gets a fresh 10 s TTL instead of expiring in the past. PXAT <absolute-millis> is absolute — it's the same deadline regardless of when you replay it. The command is idempotent under replay.
+
+Q: What happens if the server crashes mid-write? How does the replayer handle it, and why must it cut the broken tail?
+A: A crash can leave a partial line at the end of the file — e.g., SET k v PXAT 1 where the full line was supposed to be SET k v PXAT 1727900000000. The replayer reads line by line; it hits a malformed/incomplete line, truncates the file at the last valid command, and replays everything before that. You must cut the tail because leaving the partial bytes means the next append will concatenate onto garbage, corrupting the log permanently. Truncation is the only safe recovery: you lose at most one command (the one that was mid-write), but the rest of the log stays intact.

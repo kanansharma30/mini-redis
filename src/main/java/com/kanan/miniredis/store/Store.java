@@ -29,8 +29,15 @@ public class Store {
     }
 
     public void set(String key, String value, long ttlMillis) {
-        data.put(key, new Entry(value, clock.getAsLong() + ttlMillis));
+        setAt(key, value, clock.getAsLong() + ttlMillis);
     }
+
+    /** SET with an absolute deadline (epoch milliseconds). */
+    public void setAt(String key, String value, long deadlineMillis) {
+        data.put(key, new Entry(value, deadlineMillis));
+    }
+
+    public long nowMillis() { return clock.getAsLong(); }
 
     public String get(String key) {
         Entry e = data.get(key);
@@ -49,12 +56,17 @@ public class Store {
 
     /** Sets a TTL on an existing key. Returns false if the key is missing/expired. */
     public boolean expire(String key, long ttlMillis) {
+        return expireAt(key, clock.getAsLong() + ttlMillis);
+    }
+
+    /** Sets an absolute deadline on an existing key. False if the key is missing/expired. */
+    public boolean expireAt(String key, long deadlineMillis) {
         long now = clock.getAsLong();
         boolean[] updated = {false};
-        data.computeIfPresent(key, (k, e) -> {        // runs atomically for this key
-            if (e.isExpired(now)) return null;        // returning null removes the entry
+        data.computeIfPresent(key, (k, e) -> {
+            if (e.isExpired(now)) return null;
             updated[0] = true;
-            return new Entry(e.value(), now + ttlMillis);
+            return new Entry(e.value(), deadlineMillis);
         });
         return updated[0];
     }
