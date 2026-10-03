@@ -123,3 +123,22 @@ A: EX 10 is relative — it means "expire 10 s from now." If you replay that com
 
 Q: What happens if the server crashes mid-write? How does the replayer handle it, and why must it cut the broken tail?
 A: A crash can leave a partial line at the end of the file — e.g., SET k v PXAT 1 where the full line was supposed to be SET k v PXAT 1727900000000. The replayer reads line by line; it hits a malformed/incomplete line, truncates the file at the last valid command, and replays everything before that. You must cut the tail because leaving the partial bytes means the next append will concatenate onto garbage, corrupting the log permanently. Truncation is the only safe recovery: you lose at most one command (the one that was mid-write), but the rest of the log stays intact.
+
+Step 7:
+1. What does an E2E test catch that a unit test can't?
+   Unit tests check one class in a vacuum. E2E tests check that the pieces actually talk to each other over real sockets.
+
+Example: A unit test on your ConcurrentHashMap proves put/get work. It can't catch the case where the accept thread dispatches a worker before the client is registered in the map — the worker reads the socket, looks up its state, gets null, and blows up. Only a test that spins up the real server, connects a real client, and checks the reply catches that.
+
+2. Why do all clients write to the same keys?
+   To make them collide. Same keys → same bucket → real contention. That's where lost updates, check-then-act races, and visibility bugs actually live.
+
+If every client used its own key, no two threads would ever touch the same bucket. The test would pass even with zero synchronisation, because there'd be nothing to synchronise on. It would be testing the wrong thing.
+
+3. Why join() before restarting?
+   The old server thread is "told to stop" but hasn't fully exited yet. The OS might not have released the port. If you bind() too early → BindException. join() just waits for the thread to actually die so the port is free. Without it the test is flaky — passes sometimes, fails sometimes, depends on timing.
+
+4. What does CI do, and why the badge?
+   It runs your full test suite on every push. That's it.
+
+The badge matters because it's a 2-second signal to a recruiter: "this person's code actually builds and their tests actually pass, and they care enough to wire up CI." It's cheap to add (one YAML file, free on GitHub Actions) and it separates "I wrote a project" from "I wrote a project I'd ship."
